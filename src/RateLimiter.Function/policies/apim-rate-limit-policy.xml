@@ -1,0 +1,342 @@
+<!--
+    Azure APIM Inbound Policy — Multi-Case Rate Limiting
+    
+    Decision Flow:
+      1. Validate JWT token (Azure AD / Entra ID)
+      2. Extract OID, burst, and rps from JWT claims
+      3. Route to appropriate rate-limiting strategy:
+    
+    ┌─────────────────────────────────────────────────────────────────────┐
+    │ CASE 0: burst = 0            → BYPASS (no rate limiting)          │
+    │ CASE 1: OID + burst + rps    → Azure Function (Redis token bucket)│
+    │ CASE 2A: OID + no burst + IP → APIM rate-limit-by-key (IP+OID)   │
+    │ CASE 2B: OID + no burst      → APIM rate-limit-by-key (OID only) │
+    │ CASE 3: No OID               → APIM rate-limit-by-key (IP only)  │
+    └─────────────────────────────────────────────────────────────────────┘
+    
+    Configuration:
+      Replace placeholders:
+        {tenant-id}           → Your Azure AD tenant ID
+        {your-api-audience}   → App registration audience/client ID
+        {your-function-app}   → Azure Function App name
+        {{function-host-key}} → Named value in APIM containing the function host key
+-->
+<policies>
+    <inbound>
+        <base />
+
+        <!-- ========================================== -->
+        <!-- 1. VALIDATE JWT TOKEN                      -->
+        <!--    OID is NOT required here — we handle    -->
+        <!--    missing OID in Case 3 below.            -->
+        <!-- ========================================== -->
+        <validate-jwt header-name="Authorization"
+                      failed-validation-httpcode="401"
+                      failed-validation-error-message="Unauthorized: Invalid or missing token."
+                      require-expiration-time="true"
+                      require-signed-tokens="true"
+                      output-token-variable-name="jwt-token">
+            <openid-config url="https://login.microsoftonline.com/{tenant-id}/v2.0/.well-known/openid-configuration" />
+            <audiences>
+                <audience>{your-api-audience}</audience>
+            </audiences>
+            <issuers>
+                <issuer>https://login.microsoftonline.com/{tenant-id}/v2.0</issuer>
+                <issuer>https://sts.windows.net/{tenant-id}/</issuer>
+            </issuers>
+            <!-- NOTE: OID is intentionally NOT a required claim -->
+        </validate-jwt>
+
+        <!-- ========================================== -->
+        <!-- 2. EXTRACT CLAIMS INTO VARIABLES           -->
+        <!-- ========================================== -->
+
+        <!-- OID: empty string if not present -->
+        <set-variable name="oid"
+                      value="@{
+                          var jwt = (Jwt)context.Variables["jwt-token"];
+                          return jwt.Claims.ContainsKey("oid")
+                              ? jwt.Claims["oid"].FirstOrDefault() ?? ""
+                              : "";
+                      }" />
+
+        <!-- burst: null string if not present, "0" for bypass, or numeric value -->
+        <set-variable name="burst_raw"
+                      value="@{
+                          var jwt = (Jwt)context.Variables["jwt-token"];
+                          return jwt.Claims.ContainsKey("rate_limit_burst")
+                              ? jwt.Claims["rate_limit_burst"].FirstOrDefault() ?? ""
+                              : "";
+                      }" />
+
+        <!-- rps: empty string if not present -->
+        <set-variable name="rps_raw"
+                      value="@{
+                          var jwt = (Jwt)context.Variables["jwt-token"];
+                          return jwt.Claims.ContainsKey("rate_limit_rps")
+                              ? jwt.Claims["rate_limit_rps"].FirstOrDefault() ?? ""
+                              : "";
+                      }" />
+
+        <!-- Client IP: with fallback for unresolvable -->
+        <set-variable name="client_ip"
+                      value="@{
+                          var ip = context.Request.IpAddress;
+                          return string.IsNullOrWhiteSpace(ip) ? "" : ip;
+                      }" />
+
+        <!-- Derived booleans for routing -->
+        <set-variable name="has_oid"
+                      value="@(!string.IsNullOrWhiteSpace((string)context.Variables["oid"]))" />
+        <set-variable name="has_burst"
+                      value="@(!string.IsNullOrWhiteSpace((string)context.Variables["burst_raw"]))" />
+        <set-variable name="has_rps"
+                      value="@(!string.IsNullOrWhiteSpace((string)context.Variables["rps_raw"]))" />
+        <set-variable name="has_ip"
+                      value="@(!string.IsNullOrWhiteSpace((string)context.Variables["client_ip"]))" />
+        <set-variable name="is_bypass"
+                      value="@((string)context.Variables["burst_raw"] == "0")" />
+
+        <!-- Track which case was matched (for debugging/headers) -->
+        <set-variable name="rate_limit_case" value="unknown" />
+
+        <!-- ========================================== -->
+        <!-- 3. RATE LIMIT ROUTING                      -->
+        <!-- ========================================== -->
+        <choose>
+
+            <!-- ═══════════════════════════════════════ -->
+            <!-- CASE 0: BYPASS (burst = 0)             -->
+            <!-- VIP / unlimited access users           -->
+            <!-- ═══════════════════════════════════════ -->
+            <when condition="@((bool)context.Variables["is_bypass"])">
+                <set-variable name="rate_limit_case" value="bypass" />
+                <set-header name="X-RateLimit-Policy" exists-action="override">
+                    <value>bypass</value>
+                </set-header>
+                <!-- No rate limiting applied — request passes through -->
+            </when>
+
+            <!-- ═══════════════════════════════════════ -->
+            <!-- CASE 1: AZURE FUNCTION                 -->
+            <!-- OID + burst + rps all present           -->
+            <!-- Custom token bucket via Redis           -->
+            <!-- ═══════════════════════════════════════ -->
+            <when condition="@(
+                (bool)context.Variables["has_oid"] &&
+                (bool)context.Variables["has_burst"] &&
+                (bool)context.Variables["has_rps"] &&
+                !(bool)context.Variables["is_bypass"]
+            )">
+                <set-variable name="rate_limit_case" value="function" />
+                <set-header name="X-RateLimit-Policy" exists-action="override">
+                    <value>token-bucket</value>
+                </set-header>
+
+                <!-- Call Azure Function for token bucket check -->
+                <send-request mode="new"
+                              response-variable-name="rateLimitResponse"
+                              timeout="5"
+                              ignore-error="true">
+                    <set-url>https://{your-function-app}.azurewebsites.net/api/rate-limit/check</set-url>
+                    <set-method>POST</set-method>
+                    <set-header name="x-functions-key" exists-action="override">
+                        <value>{{function-host-key}}</value>
+                    </set-header>
+                    <set-header name="Content-Type" exists-action="override">
+                        <value>application/json</value>
+                    </set-header>
+                    <set-body>@{
+                        return new JObject(
+                            new JProperty("oid", (string)context.Variables["oid"]),
+                            new JProperty("burst", int.Parse((string)context.Variables["burst_raw"])),
+                            new JProperty("rps", int.Parse((string)context.Variables["rps_raw"]))
+                        ).ToString();
+                    }</set-body>
+                </send-request>
+
+                <!-- Handle function response -->
+                <choose>
+                    <!-- Rate limited (429) -->
+                    <when condition="@(
+                        context.Variables.ContainsKey("rateLimitResponse") &&
+                        ((IResponse)context.Variables["rateLimitResponse"]).StatusCode == 429
+                    )">
+                        <return-response>
+                            <set-status code="429" reason="Too Many Requests" />
+                            <set-header name="Content-Type" exists-action="override">
+                                <value>application/json</value>
+                            </set-header>
+                            <set-header name="Retry-After" exists-action="override">
+                                <value>@(((IResponse)context.Variables["rateLimitResponse"])
+                                    .Headers.GetValueOrDefault("Retry-After", "1"))</value>
+                            </set-header>
+                            <set-header name="X-RateLimit-Limit" exists-action="override">
+                                <value>@((string)context.Variables["burst_raw"])</value>
+                            </set-header>
+                            <set-header name="X-RateLimit-Remaining" exists-action="override">
+                                <value>0</value>
+                            </set-header>
+                            <set-header name="X-RateLimit-Policy" exists-action="override">
+                                <value>token-bucket</value>
+                            </set-header>
+                            <set-body>@{
+                                return new JObject(
+                                    new JProperty("error", "rate_limit_exceeded"),
+                                    new JProperty("message", "Too many requests. Please retry after the duration specified in the Retry-After header."),
+                                    new JProperty("retryAfter", ((IResponse)context.Variables["rateLimitResponse"])
+                                        .Headers.GetValueOrDefault("Retry-After", "1")),
+                                    new JProperty("policy", "token-bucket")
+                                ).ToString();
+                            }</set-body>
+                        </return-response>
+                    </when>
+
+                    <!-- Function error or unreachable — fail open -->
+                    <when condition="@(
+                        !context.Variables.ContainsKey("rateLimitResponse") ||
+                        ((IResponse)context.Variables["rateLimitResponse"]).StatusCode != 200
+                    )">
+                        <set-header name="X-RateLimit-Status" exists-action="override">
+                            <value>unavailable</value>
+                        </set-header>
+                    </when>
+                </choose>
+            </when>
+
+            <!-- ═══════════════════════════════════════ -->
+            <!-- CASE 2A: APIM IP-BASED (OID + no burst -->
+            <!--          + IP resolvable)               -->
+            <!-- 20 calls per minute, keyed on OID+IP   -->
+            <!-- Refills 10 tokens per minute            -->
+            <!-- ═══════════════════════════════════════ -->
+            <when condition="@(
+                (bool)context.Variables["has_oid"] &&
+                !(bool)context.Variables["has_burst"] &&
+                (bool)context.Variables["has_ip"]
+            )">
+                <set-variable name="rate_limit_case" value="apim-ip-oid" />
+                <set-header name="X-RateLimit-Policy" exists-action="override">
+                    <value>apim-ip-oid</value>
+                </set-header>
+
+                <!-- APIM built-in rate limiting: 20 calls per 60 seconds, keyed on OID+IP -->
+                <rate-limit-by-key calls="20"
+                                   renewal-period="60"
+                                   increment-condition="@(true)"
+                                   counter-key="@(
+                                       (string)context.Variables["oid"] + "_" +
+                                       (string)context.Variables["client_ip"]
+                                   )"
+                                   retry-after-header-name="Retry-After"
+                                   retry-after-variable-name="retryAfter"
+                                   remaining-calls-header-name="X-RateLimit-Remaining"
+                                   remaining-calls-variable-name="remainingCalls"
+                                   total-calls-header-name="X-RateLimit-Limit" />
+            </when>
+
+            <!-- ═══════════════════════════════════════ -->
+            <!-- CASE 2B: APIM OID-ONLY (OID + no burst -->
+            <!--          + IP NOT resolvable)           -->
+            <!-- 20 calls per minute, keyed on OID only -->
+            <!-- Fallback when IP cannot be determined   -->
+            <!-- ═══════════════════════════════════════ -->
+            <when condition="@(
+                (bool)context.Variables["has_oid"] &&
+                !(bool)context.Variables["has_burst"] &&
+                !(bool)context.Variables["has_ip"]
+            )">
+                <set-variable name="rate_limit_case" value="apim-oid-only" />
+                <set-header name="X-RateLimit-Policy" exists-action="override">
+                    <value>apim-oid-only</value>
+                </set-header>
+
+                <!-- APIM built-in rate limiting: 20 calls per 60 seconds, keyed on OID -->
+                <rate-limit-by-key calls="20"
+                                   renewal-period="60"
+                                   increment-condition="@(true)"
+                                   counter-key="@((string)context.Variables["oid"])"
+                                   retry-after-header-name="Retry-After"
+                                   retry-after-variable-name="retryAfter"
+                                   remaining-calls-header-name="X-RateLimit-Remaining"
+                                   remaining-calls-variable-name="remainingCalls"
+                                   total-calls-header-name="X-RateLimit-Limit" />
+            </when>
+
+            <!-- ═══════════════════════════════════════ -->
+            <!-- CASE 3: NO OID (Anonymous / missing)   -->
+            <!-- 20 calls per minute, keyed on IP       -->
+            <!-- If IP also missing, use "anonymous"     -->
+            <!-- ═══════════════════════════════════════ -->
+            <otherwise>
+                <set-variable name="rate_limit_case" value="apim-anonymous" />
+                <set-header name="X-RateLimit-Policy" exists-action="override">
+                    <value>apim-anonymous</value>
+                </set-header>
+
+                <!-- APIM built-in rate limiting: 20 calls per 60 seconds, keyed on IP or "anonymous" -->
+                <rate-limit-by-key calls="20"
+                                   renewal-period="60"
+                                   increment-condition="@(true)"
+                                   counter-key="@(
+                                       (bool)context.Variables["has_ip"]
+                                           ? (string)context.Variables["client_ip"]
+                                           : "anonymous"
+                                   )"
+                                   retry-after-header-name="Retry-After"
+                                   retry-after-variable-name="retryAfter"
+                                   remaining-calls-header-name="X-RateLimit-Remaining"
+                                   remaining-calls-variable-name="remainingCalls"
+                                   total-calls-header-name="X-RateLimit-Limit" />
+            </otherwise>
+        </choose>
+
+        <!-- ========================================== -->
+        <!-- 4. FORWARD METADATA TO BACKEND             -->
+        <!-- ========================================== -->
+        <set-header name="X-RateLimit-OID" exists-action="override">
+            <value>@((string)context.Variables["oid"])</value>
+        </set-header>
+        <set-header name="X-RateLimit-Case" exists-action="override">
+            <value>@((string)context.Variables["rate_limit_case"])</value>
+        </set-header>
+    </inbound>
+
+    <backend>
+        <base />
+    </backend>
+
+    <outbound>
+        <base />
+
+        <!-- Attach rate-limit metadata to client response -->
+        <set-header name="X-RateLimit-Policy" exists-action="skip">
+            <value>@((string)context.Variables["rate_limit_case"])</value>
+        </set-header>
+
+        <!-- For Case 1 (function), forward remaining count from function response -->
+        <choose>
+            <when condition="@(
+                (string)context.Variables["rate_limit_case"] == "function" &&
+                context.Variables.ContainsKey("rateLimitResponse") &&
+                ((IResponse)context.Variables["rateLimitResponse"]).StatusCode == 200
+            )">
+                <set-header name="X-RateLimit-Limit" exists-action="override">
+                    <value>@((string)context.Variables["burst_raw"])</value>
+                </set-header>
+                <set-header name="X-RateLimit-Remaining" exists-action="override">
+                    <value>@(((IResponse)context.Variables["rateLimitResponse"])
+                        .Headers.GetValueOrDefault("X-RateLimit-Remaining", "unknown"))</value>
+                </set-header>
+            </when>
+        </choose>
+    </outbound>
+
+    <on-error>
+        <base />
+        <!-- On any error, fail open and tag the response -->
+        <set-header name="X-RateLimit-Status" exists-action="override">
+            <value>error</value>
+        </set-header>
+    </on-error>
+</policies>

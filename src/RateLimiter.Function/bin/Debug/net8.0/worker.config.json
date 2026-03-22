@@ -1,0 +1,10 @@
+{
+  "description": {
+    "language": "dotnet-isolated",
+    "extensions": [ ".dll" ],
+    "defaultExecutablePath": "dotnet",
+    "defaultWorkerPath": "RateLimiter.Function.dll",
+    "workerIndexing": "true",
+    "canUsePlaceholder": true
+  }
+}

@@ -1,0 +1,29 @@
+[
+  {
+    "name": "RateLimitCheck",
+    "scriptFile": "RateLimiter.Function.dll",
+    "entryPoint": "RateLimiter.Function.Functions.TokenBucketFunction.RunAsync",
+    "language": "dotnet-isolated",
+    "properties": {
+      "IsCodeless": false
+    },
+    "bindings": [
+      {
+        "name": "req",
+        "direction": "In",
+        "type": "httpTrigger",
+        "authLevel": "Function",
+        "methods": [
+          "post"
+        ],
+        "route": "rate-limit/check",
+        "properties": {}
+      },
+      {
+        "name": "$return",
+        "type": "http",
+        "direction": "Out"
+      }
+    ]
+  }
+]
