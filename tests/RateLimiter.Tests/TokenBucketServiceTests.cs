@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Moq;
 using RateLimiter.Function.Services;
 using StackExchange.Redis;
+using Xunit;
 
 namespace RateLimiter.Tests;
 
