@@ -139,20 +139,25 @@ public sealed class TokenBucketService : ITokenBucketService
         }
         catch (RedisConnectionException ex)
         {
-            // FAIL OPEN: Redis outage should not block all API traffic.
-            // Alert on this via Application Insights.
-            _logger.LogError(ex,
-                "Redis connection failed during rate limit check for OID={Oid}. " +
-                "Failing open — request will be allowed.",
+            _logger.LogCritical(ex,
+                "REDIS CONNECTION FAILURE for OID={Oid}. Check if Redis is running at the configured endpoint. " +
+                "Failing open - request will be ALLOWED.",
                 oid);
             return (true, burst, 0);
         }
         catch (RedisTimeoutException ex)
         {
-            _logger.LogError(ex,
-                "Redis timeout during rate limit check for OID={Oid}. Failing open.",
+            _logger.LogWarning(ex,
+                "Redis timeout for OID={Oid}. Failing open.",
                 oid);
             return (true, burst, 0);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "UNEXPECTED ERROR during rate limit check for OID={Oid}. Type: {Type}",
+                oid, ex.GetType().Name);
+            return (true, burst, 0); // Still fail open to prevent API outage
         }
     }
 

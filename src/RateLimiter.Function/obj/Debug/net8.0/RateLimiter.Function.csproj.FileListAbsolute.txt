@@ -127,3 +127,4 @@
 /Users/pavanthatavarthi/.gemini/antigravity/scratch/apim-token-bucket-ratelimiter/src/RateLimiter.Function/bin/output/runtimes/win/lib/net6.0/System.Drawing.Common.dll
 /Users/pavanthatavarthi/.gemini/antigravity/scratch/apim-token-bucket-ratelimiter/src/RateLimiter.Function/bin/output/runtimes/win/lib/net6.0/System.Security.Cryptography.ProtectedData.dll
 /Users/pavanthatavarthi/.gemini/antigravity/scratch/apim-token-bucket-ratelimiter/src/RateLimiter.Function/bin/output/runtimes/win/lib/net6.0/System.Windows.Extensions.dll
+/Users/pavanthatavarthi/.gemini/antigravity/scratch/apim-token-bucket-ratelimiter/src/RateLimiter.Function/obj/Debug/net8.0/RateLimiter.Function.sourcelink.json

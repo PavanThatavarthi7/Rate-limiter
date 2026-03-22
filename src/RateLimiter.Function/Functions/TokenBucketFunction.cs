@@ -78,7 +78,13 @@ public sealed class TokenBucketFunction
         var statusCode = allowed ? HttpStatusCode.OK : HttpStatusCode.TooManyRequests;
         var response = req.CreateResponse(statusCode);
 
-        // Standard rate-limit headers (RFC 6585 / draft-ietf-httpapi-ratelimit-headers)
+        // Debug header to help distinguish Redis response vs Fail-Open
+        var debugInfo = (allowed && remaining == request.Burst && retryAfterMs == 0)
+            ? "possible-fail-open"
+            : "redis-check-success";
+        response.Headers.Add("X-RateLimit-Debug", debugInfo);
+
+        // Standard rate-limit headers (RFC 6585)
         response.Headers.Add("X-RateLimit-Limit", request.Burst.ToString());
         response.Headers.Add("X-RateLimit-Remaining", remaining.ToString());
 

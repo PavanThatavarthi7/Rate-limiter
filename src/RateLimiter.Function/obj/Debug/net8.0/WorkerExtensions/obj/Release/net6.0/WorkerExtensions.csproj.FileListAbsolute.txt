@@ -64,3 +64,4 @@
 /Users/pavanthatavarthi/.gemini/antigravity/scratch/apim-token-bucket-ratelimiter/src/RateLimiter.Function/obj/Debug/net8.0/WorkerExtensions/obj/Release/net6.0/refint/Microsoft.Azure.Functions.Worker.Extensions.dll
 /Users/pavanthatavarthi/.gemini/antigravity/scratch/apim-token-bucket-ratelimiter/src/RateLimiter.Function/obj/Debug/net8.0/WorkerExtensions/obj/Release/net6.0/Microsoft.Azure.Functions.Worker.Extensions.pdb
 /Users/pavanthatavarthi/.gemini/antigravity/scratch/apim-token-bucket-ratelimiter/src/RateLimiter.Function/obj/Debug/net8.0/WorkerExtensions/obj/Release/net6.0/ref/Microsoft.Azure.Functions.Worker.Extensions.dll
+/Users/pavanthatavarthi/.gemini/antigravity/scratch/apim-token-bucket-ratelimiter/src/RateLimiter.Function/obj/Debug/net8.0/WorkerExtensions/obj/Release/net6.0/WorkerExtensions.sourcelink.json
