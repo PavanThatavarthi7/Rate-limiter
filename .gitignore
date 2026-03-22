@@ -1,0 +1,38 @@
+# .gitignore for .NET & Azure Functions
+
+# --- Build Artifacts ---
+bin/
+obj/
+publish/
+[Ll]og/
+[Log]s/
+
+# --- Azure Functions ---
+local.settings.json
+Secrets.json
+.azurefunctions/
+.funcignore
+
+# --- Azurite (Local Storage Emulator) ---
+__azurite_db_*.json
+__blobstorage__/
+__queuestorage__/
+__tablestorage__/
+AzuriteConfig
+
+# --- Database / App Temp Files ---
+*.db
+*.sqlite
+dump.rdb
+
+# --- Visual Studio ---
+.vs/
+*.user
+*.userosscache
+*.sln.docstates
+
+# --- VS Code ---
+.vscode/
+
+# --- macOS ---
+.DS_Store
