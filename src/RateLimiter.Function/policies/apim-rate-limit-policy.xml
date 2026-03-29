@@ -162,6 +162,11 @@
                         context.Variables.ContainsKey("rateLimitResponse") &&
                         ((IResponse)context.Variables["rateLimitResponse"]).StatusCode == 429
                     )">
+                        <trace source="RateLimitPolicy" severity="warning">
+                            <message>Rate limit exceeded by Azure Function Token Bucket</message>
+                            <metadata name="UserId" value="@((string)context.Variables["oid"])" />
+                            <metadata name="RateLimitCase" value="function" />
+                        </trace>
                         <return-response>
                             <set-status code="429" reason="Too Many Requests" />
                             <set-header name="Content-Type" exists-action="override">
@@ -292,8 +297,14 @@
         </choose>
 
         <!-- ========================================== -->
-        <!-- 4. FORWARD METADATA TO BACKEND             -->
+        <!-- 4. FORWARD METADATA TO BACKEND & TRACE     -->
         <!-- ========================================== -->
+        <trace source="RateLimitPolicy" severity="information">
+            <message>Request allowed through rate limiting</message>
+            <metadata name="UserId" value="@((string)context.Variables["oid"])" />
+            <metadata name="RateLimitCase" value="@((string)context.Variables["rate_limit_case"])" />
+        </trace>
+
         <set-header name="X-RateLimit-OID" exists-action="override">
             <value>@((string)context.Variables["oid"])</value>
         </set-header>
@@ -334,6 +345,13 @@
 
     <on-error>
         <base />
+        
+        <trace source="RateLimitPolicy" severity="warning">
+            <message>Request blocked by APIM native rate limiting or generalized error</message>
+            <metadata name="UserId" value="@(context.Variables.ContainsKey("oid") ? (string)context.Variables["oid"] : "unknown")" />
+            <metadata name="RateLimitCase" value="@(context.Variables.ContainsKey("rate_limit_case") ? (string)context.Variables["rate_limit_case"] : "error")" />
+        </trace>
+
         <!-- On any error, fail open and tag the response -->
         <set-header name="X-RateLimit-Status" exists-action="override">
             <value>error</value>

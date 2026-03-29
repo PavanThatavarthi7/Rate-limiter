@@ -78,6 +78,11 @@ public sealed class TokenBucketFunction
         var statusCode = allowed ? HttpStatusCode.OK : HttpStatusCode.TooManyRequests;
         var response = req.CreateResponse(statusCode);
 
+        // Structured logging for App Insights (using custom dimensions)
+        _logger.LogInformation(
+            "RateLimit Check: OID={Oid}, Allowed={Allowed}, Remaining={Remaining}, Limit={Limit}, RetryAfterMs={RetryAfterMs}",
+            request.Oid, allowed, remaining, request.Burst, retryAfterMs);
+
         // Debug header to help distinguish Redis response vs Fail-Open
         var debugInfo = (allowed && remaining == request.Burst && retryAfterMs == 0)
             ? "possible-fail-open"
